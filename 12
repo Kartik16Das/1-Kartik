@@ -1,0 +1,161 @@
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Updater, CommandHandler, MessageHandler, Filters, CallbackContext, 
+    ConversationHandler, CallbackQueryHandler
+)
+import openai
+from pytube import YouTube
+
+# Your Telegram Bot Token
+TELEGRAM_BOT_TOKEN = os.environ.get('6773926180:AAErgGAH1N0QgzeIOZdtpUPxM_WSaaSyMLc')
+
+# Your OpenAI GPT API Key
+OPENAI_API_KEY = os.environ.get('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')
+
+# State constants
+CHOOSING, TYPING_REPLY, MUSIC_QUALITY, VIDEO_QUALITY = range(4)
+
+# Temporary storage for user data
+user_data = {}
+
+# List of admin user IDs or selected member user IDs
+admin_user_ids = [123456789, 987654321]  # Replace with actual user IDs
+
+def start(update: Update, context: CallbackContext) -> None:
+    user_data.clear()
+    update.message.reply_text("Hello! I'm your chatbot and friend. Send me a message and let's chat!")
+
+def reply(update: Update, context: CallbackContext) -> None:
+    user = update.message.from_user
+    text = update.message.text
+
+    if text.lower() == 'stop':
+        update.message.reply_text("Goodbye! If you want to chat again, just send me a message.")
+        user_data.clear()
+        return
+
+    response = generate_chat_response(text)
+    update.message.reply_text(response)
+
+def generate_chat_response(user_input):
+    openai.api_key = OPENAI_API_KEY
+    prompt = f"User: {user_input}\nChatGPT:"
+
+    response = openai.Completion.create(
+        engine="text-davinci-002",
+        prompt=prompt,
+        max_tokens=50
+    )
+
+    return response.choices[0].text.strip()
+
+def play(update: Update, context: CallbackContext) -> None:
+    user_data.clear()
+    user_data['user_id'] = update.message.from_user.id
+    update.message.reply_text("Choose an option:",
+                              reply_markup=get_keyboard_markup())
+    return CHOOSING
+
+def get_keyboard_markup():
+    keyboard = [
+        [InlineKeyboardButton("Start Music", callback_data=str(MUSIC_QUALITY)),
+         InlineKeyboardButton("Start Video", callback_data=str(VIDEO_QUALITY))]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def quality_options(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    user_id = query.from_user.id
+    user_data['user_id'] = user_id
+    user_data['option'] = int(query.data)
+    
+    if user_data['option'] == MUSIC_QUALITY:
+        query.edit_message_text("Choose music quality:",
+                                reply_markup=get_music_quality_markup())
+        return TYPING_REPLY
+    elif user_data['option'] == VIDEO_QUALITY:
+        query.edit_message_text("Choose video quality:",
+                                reply_markup=get_video_quality_markup())
+        return TYPING_REPLY
+    else:
+        return ConversationHandler.END
+
+def get_music_quality_markup():
+    keyboard = [
+        [InlineKeyboardButton("High Quality", callback_data='high')],
+        [InlineKeyboardButton("Low Quality", callback_data='low')]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_video_quality_markup():
+    keyboard = [
+        [InlineKeyboardButton("High Quality", callback_data='high')],
+        [InlineKeyboardButton("Low Quality", callback_data='low')]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def set_quality(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    user_data['quality'] = query.data
+    user_id = user_data['user_id']
+
+    if user_data['option'] == MUSIC_QUALITY:
+        query.edit_message_text(f"Starting music playback with {user_data['quality']} quality.")
+        # Add your logic to start music playback
+        send_audio_to_group(context, user_id, 'path/to/music.mp3')  # Replace with the actual path
+    elif user_data['option'] == VIDEO_QUALITY:
+        query.edit_message_text(f"Starting video playback with {user_data['quality']} quality.")
+        # Add your logic to start video playback
+        send_video_to_group(context, user_id, 'path/to/video.mp4')  # Replace with the actual path
+
+    user_data.clear()
+    return ConversationHandler.END
+
+def send_audio_to_group(context, user_id, audio_path):
+    chat_id = context.job.context['chat_id']
+    context.bot.send_audio(chat_id=chat_id, audio=open(audio_path, 'rb'))
+
+def send_video_to_group(context, user_id, video_path):
+    chat_id = context.job.context['chat_id']
+    context.bot.send_video(chat_id=chat_id, video=open(video_path, 'rb'))
+
+def stop(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    update.message.reply_text("Stopping playback.")
+    # Add your logic to stop playback
+    return ConversationHandler.END
+
+def auto_play(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    update.message.reply_text("Automatically start playback.")
+    # Add your logic for automatic playback
+
+# Add other handlers as needed
+
+def main():
+    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler('start', start),
+            CommandHandler('play', play)
+        ],
+        states={
+            TYPING_REPLY: [MessageHandler(Filters.text & ~Filters.command, reply)],
+            CHOOSING: [CallbackQueryHandler(quality_options)],
+            MUSIC_QUALITY: [CallbackQueryHandler(set_quality)],
+            VIDEO_QUALITY: [CallbackQueryHandler(set_quality)],
+        },
+        fallbacks=[CommandHandler('stop', stop)],
+    )
+
+    dp.add_handler(conv_handler)
+    dp.add_handler(MessageHandler(Filters.regex('^Auto Play$'), auto_play))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
